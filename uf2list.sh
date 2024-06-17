@@ -137,8 +137,8 @@ for file in ${ARGS}; do
 				## Category-specific processing: magicStart0
 				##
 				if [ "${category}" = "magicStart0" ]; then
-					data=$(echo "${value}" | sed 's/\([^ ][^ ]\)/\\x\1/g')
-					data=$(echo -ne "${data}" | tr -d '\n' | tr -d ' ' | rev)
+					data=$(echo "${value}"    | sed 's/\([^ ][^ ]\)/\\x\1/g')
+					data=$(echo -ne "${data}" | tr -d ' \n' | rev)
 					value="${value} \"${data}\""
 				fi
 
@@ -180,17 +180,17 @@ for file in ${ARGS}; do
 			if [ "${category}" = "data" ]; then
 					msg="data:"
 					count=0
-					index=1
+					step=1
 					value=
 					for byte in ${BLOCKDATA[${category}]}; do
 						if [ "${DISPLAY}" = "true" ]; then
 							value="${value} ${byte}"
-							if [ "${index}" -eq 16 ]; then
+							if [ "${step}" -eq 16 ]; then
 								value=$(echo "${value}" | sed 's/^  *//g')
 								printf "    %12s %s\n" "${msg}" "${value}"
 								msg=
 								value=
-								index=0
+								step=0
 							fi
 						fi
 
@@ -201,7 +201,7 @@ for file in ${ARGS}; do
 						fi
 
 						let count=count+1
-						let index=index+1
+						let step=step+1
 					done
 			else
 

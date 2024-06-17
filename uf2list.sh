@@ -68,6 +68,10 @@ for file in ${ARGS}; do
 	[ "${DEBUG}" = "true" ] && echo "--------------------------------------"       1>&2
 	[ "${SAVE}"  = "true" ] && echo -n                                  >  ${file}.bin
 
+	####################################################################################
+	##
+	## While there are still blocks to process, keep going.
+	##
 	while [ "${blockNo}" -le "${numBlocks}" ]; do
 
 		################################################################################
@@ -86,12 +90,6 @@ for file in ${ARGS}; do
 		##
 		ODFLAGS="-Ax -tx1z -v -w4 --endian=little"
 		BYTES=($(od ${ODFLAGS} -j ${offset} -N 512 ${file} | cut -d' ' -f2-5 | head -128))
-
-		################################################################################
-		##
-		## Read and process 32 byte header; array-ize and store in DATA
-		##
-		#HEADER=($(od ${ODFLAGS} ${file} -j ${offset} -N 32 | cut -d' ' -f2 | head -8))
 
 		################################################################################
 		##
@@ -144,7 +142,7 @@ for file in ${ARGS}; do
 
 				########################################################################
 				##
-				## Category-specific processing: blockNo
+				## Category-specific processing: blockNo; add one for intuitive output
 				##
 				if [ "${category}" = "blockNo" ]; then
 					blockNo=$(echo "ibase=16; ${data}+1" | bc -q)
@@ -182,7 +180,14 @@ for file in ${ARGS}; do
 					count=0
 					step=1
 					value=
+					[ "${DEBUG}" = "true" ] && echo "${BLOCKDATA[${category}]}" > data.${blockNo}
 					for byte in ${BLOCKDATA[${category}]}; do
+
+						################################################################
+						##
+						## If displaying, wrap the line every 16 bytes
+						##
+						##
 						if [ "${DISPLAY}" = "true" ]; then
 							value="${value} ${byte}"
 							if [ "${step}" -eq 16 ]; then
@@ -194,8 +199,17 @@ for file in ${ARGS}; do
 							fi
 						fi
 
+						################################################################
+						##
+						## If saving, escape each byte for hex representation, and
+						## append to the .bin file. Do this up to the payloadSize.
+						##
 						if [ "${SAVE}"  = "true" ]; then
 							if [ "${count}" -lt "${payloadSize}" ]; then
+								if [ "${blockNo}" -eq 106 ]; then
+									echo "[payload ${payloadSize}] at count ${count}, saving ${byte} to file"
+									# instead of writing directly, write to a temporary file, keeping track of sequential zeros. If the file ends and all we have are zeros, do not write them. That seems to be what is happening.
+								fi
 								echo -ne "\\x${byte}"                   >> ${file}.bin
 							fi
 						fi

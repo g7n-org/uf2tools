@@ -62,6 +62,7 @@ for file in ${ARGS}; do
 	## Initialize per-file variables
 	##
 	offset=0
+	outset=0
 	blockNo=1
 	numBlocks=99999999
 	[ "${DEBUG}" = "true" ] && echo "[block ${blockNo}] initial offset: ${offset}" 1>&2
@@ -86,9 +87,15 @@ for file in ${ARGS}; do
 
 		################################################################################
 		##
-		## Load the current 512-byte block into the BLOCK array
+		## Initialize block variables
 		##
 		ODFLAGS="-Ax -tx1z -v -w4 --endian=little"
+		ZERO=0
+
+		################################################################################
+		##
+		## Load the current 512-byte block into the BYTES array
+		##
 		BYTES=($(od ${ODFLAGS} -j ${offset} -N 512 ${file} | cut -d' ' -f2-5 | head -128))
 
 		################################################################################
@@ -104,6 +111,11 @@ for file in ${ARGS}; do
 			## All categories are 4 bytes, save for "data", which is 476.
 			##
 			if [ "${category}" = "data" ]; then
+
+				########################################################################
+				##
+				## The payload is 476 bytes
+				##
 				max=476
 
 				########################################################################
@@ -206,11 +218,17 @@ for file in ${ARGS}; do
 						##
 						if [ "${SAVE}"  = "true" ]; then
 							if [ "${count}" -lt "${payloadSize}" ]; then
-								if [ "${blockNo}" -eq 106 ]; then
-									echo "[payload ${payloadSize}] at count ${count}, saving ${byte} to file"
+							#	if [ "${blockNo}" -eq 106 ]; then
+									#echo "[payload ${payloadSize}] at count ${count}, saving ${byte} to file"
 									# instead of writing directly, write to a temporary file, keeping track of sequential zeros. If the file ends and all we have are zeros, do not write them. That seems to be what is happening.
+							#	fi
+							    if [ "${byte}" = "00" ]; then
+									let ZERO=ZERO+1
+								else
+									ZERO=0
 								fi
 								echo -ne "\\x${byte}"                   >> ${file}.bin
+								let outset=outset+1
 							fi
 						fi
 
@@ -244,8 +262,21 @@ for file in ${ARGS}; do
 		fi
 		let blockNo=blockNo+1
 		let offset=offset+512
+
 	done
 
+	####################################################################################
+	##
+	## File is complete, check if we have a run of trailing zeros, eliminate them
+	##
+	if [ "${SAVE}" = "true" ]; then
+		if [ "${ZERO}" -gt 0 ]; then
+			let cutsize=outset-ZERO
+			/bin/mv -f ${file}.bin ${file}.tmp
+			dd if=${file}.tmp of=${file}.bin bs=1 count=${cutsize}
+			/bin/rm -f ${file}.tmp
+		fi
+	fi
 done
 
 exit 0

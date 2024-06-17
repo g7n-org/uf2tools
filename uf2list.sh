@@ -35,17 +35,19 @@
 ##
 ## Declare variables
 ##
-CATEGORY=(magicStart0 magicStart1 flags targetAddr payloadSize blockNo numBlocks fileSize)
-ARGLIST="${*}"
-DEBUG=$(echo   "${ARGLIST}" | egrep -qio '\<debug\>'   && echo "true"  || echo "false")
-SAVE=$(echo    "${ARGLIST}" | egrep -qio '\<save\>'    && echo "true"  || echo "false")
-DISPLAY=$(echo "${ARGLIST}" | egrep -qio '\<quiet\>'   && echo "false" || echo "true")
-EXTRACT=$(echo "${ARGLIST}" | egrep -qio '\<extract\>' && echo "true"  || echo "false")
-ARGLIST=$(echo "${ARGLIST}" | sed 's/debug//g'   | sed 's/  / /g')
-ARGLIST=$(echo "${ARGLIST}" | sed 's/extract//g' | sed 's/  / /g')
-ARGLIST=$(echo "${ARGLIST}" | sed 's/quiet//g'   | sed 's/  / /g')
-ARGLIST=$(echo "${ARGLIST}" | sed 's/save//g'    | sed 's/  / /g')
-declare -a HEADER
+CATEGORY_LIST="magicStart0 magicStart1 flags targetAddr payloadSize blockNo numBlocks"
+CATEGORY_LIST="${CATEGORY_LIST} fileSize data magicEnd"
+ARGS="${*}"
+DEBUG=$(echo   "${ARGS}" | egrep -qio '\<debug\>'   && echo "true"  || echo "false")
+SAVE=$(echo    "${ARGS}" | egrep -qio '\<save\>'    && echo "true"  || echo "false")
+DISPLAY=$(echo "${ARGS}" | egrep -qio '\<quiet\>'   && echo "false" || echo "true")
+EXTRACT=$(echo "${ARGS}" | egrep -qio '\<extract\>' && echo "true"  || echo "false")
+ARGS=$(echo    "${ARGS}" | sed 's/debug//g'   | sed 's/  / /g')
+ARGS=$(echo    "${ARGS}" | sed 's/extract//g' | sed 's/  / /g')
+ARGS=$(echo    "${ARGS}" | sed 's/quiet//g'   | sed 's/  / /g')
+ARGS=$(echo    "${ARGS}" | sed 's/save//g'    | sed 's/  / /g')
+declare -A BLOCKDATA
+declare -a BYTES
 
 [ "${EXTRACT}" = "true" ] && DISPLAY="false" && SAVE="true"
 
@@ -53,13 +55,12 @@ declare -a HEADER
 ##
 ## Process for each file specified
 ##
-for file in ${ARGLIST}; do
+for file in ${ARGS}; do
 
 	####################################################################################
 	##
 	## Initialize per-file variables
 	##
-	ODFLAGS="-Ax -tx4z -v -w4 --endian=little"
 	offset=0
 	blockNo=1
 	numBlocks=99999999
@@ -81,73 +82,160 @@ for file in ${ARGLIST}; do
 
 		################################################################################
 		##
-		## Read and process 32 byte header; array-ize and store in DATA
+		## Load the current 512-byte block into the BLOCK array
 		##
-		HEADER=($(od ${ODFLAGS} ${file} -j ${offset} -N 32 | cut -d' ' -f2 | head -8))
-		[ "${DEBUG}" = "true" ] && echo "[block ${blockNo}] starting offset: ${offset}" 1>&2
+		ODFLAGS="-Ax -tx1z -v -w4 --endian=little"
+		BYTES=($(od ${ODFLAGS} -j ${offset} -N 512 ${file} | cut -d' ' -f2-5 | head -128))
 
 		################################################################################
 		##
-		## Cycle through each of the UF2 header categories in the CATEGORY array, 
-		## indexed with the DATA array
+		## Read and process 32 byte header; array-ize and store in DATA
 		##
-		for ((index=0; index<8; index++)); do
+		#HEADER=($(od ${ODFLAGS} ${file} -j ${offset} -N 32 | cut -d' ' -f2 | head -8))
+
+		################################################################################
+		##
+		## The UF2 header constitutes the first 32 bytes of the UF2 block. Determine
+		## various block properties.
+		##
+		index=0
+		for category in ${CATEGORY_LIST}; do
 
 			############################################################################
 			##
-			## Break the 4 bytes out into individual bytes for display
+			## All categories are 4 bytes, save for "data", which is 476.
 			##
-			value=$(echo "${HEADER[${index}]}" | sed 's/^\(..\)\(..\)\(..\)\(..\)$/\1 \2 \3 \4/g')
+			if [ "${category}" = "data" ]; then
+				max=476
 
-			############################################################################
-			##
-			## Display current CATEGORY and its value
-			##
-			if [ "${DISPLAY}" = "true" ]; then
-				printf "    %11s: %8s\n" "${CATEGORY[${index}]}" "${value}"
+				########################################################################
+				##
+				## Break the section bytes out into individual bytes for display
+				##
+				value=
+				for ((count=0; count<${max}; count++)); do
+					value="${value} ${BYTES[$((${index}+${count}))]}"
+				done
+				
+			else
+				max=4
+
+				########################################################################
+				##
+				## Break the section bytes out into individual bytes for display
+				##
+				value=
+				for ((count=${max}-1; count>=0; count--)); do
+					value="${value} ${BYTES[$((${index}+${count}))]}"
+				done
 			fi
-			if [ "${CATEGORY[${index}]}" = "numBlocks" ]; then
-				value=$(echo "${HEADER[${index}]}" | tr 'a-f' 'A-F')
+
+			value=$(echo "${value}" | sed 's/^  *//g' | tr 'abcdef' 'ABCDEF')
+			let index=index+max
+			BLOCKDATA["${category}"]="${value}"
+
+			############################################################################
+			##
+			## If current category is 'blockNo', compute that value (add 1 to make the
+			## output make more sense (otherwise 0 would be the first block)
+			##
+			if [ "${category}" = "blockNo" ]; then
+				value=$(echo "${BLOCKDATA[${category}]}" | tr -d ' ')
+				blockNo=$(echo "ibase=16; ${value}+1" | bc -q)
+			fi
+
+			############################################################################
+			##
+			## If current category is 'numBlocks', compute that value
+			##
+			if [ "${category}" = "numBlocks" ]; then
+				value=$(echo "${BLOCKDATA[${category}]}" | tr -d ' ')
 				numBlocks=$(echo "ibase=16; ${value}" | bc -q)
 			fi
+
+			############################################################################
+			##
+			## If current category is 'payloadSize', compute that value
+			##
+			if [ "${category}" = "payloadSize" ]; then
+				value=$(echo "${BLOCKDATA[${category}]}" | tr -d ' ')
+				payloadSize=$(echo "ibase=16; ${value}" | bc -q)
+			fi
+
+			############################################################################
+			##
+			## Display category data
+			##
+			if [ "${category}" = "data" ]; then
+				if [ "${DISPLAY}" = "true" ]; then
+					msg="data:"
+					count=1
+					value=
+					for byte in ${BLOCKDATA[${category}]}; do
+						#value=$(echo "${entry}" | sed 's/\([^ ][^ ]\)/\1 /g' | sed 's/  / /g')
+						value="${value} ${byte}"
+						if [ "${count}" -eq 16 ]; then
+							value=$(echo "${value}" | sed 's/^  *//g')
+							printf "    %12s %s\n" "${msg}" "${value}"
+							msg=
+							value=
+							count=0
+						fi
+						let count=count+1
+					done
+				fi
+			else
+
+				########################################################################
+				##
+				## Display current CATEGORY and its value
+				##
+				if [ "${DISPLAY}" = "true" ]; then
+					printf "    %11s: %8s\n" "${category}" "${BLOCKDATA[${category}]}"
+					#printf "    %11s: %8s\n" "${CATEGORY[${index}]}" "${value}"
+				fi
+			fi
 		done
+		[ "${DEBUG}" = "true" ] && echo "[block ${blockNo}] starting offset: ${offset}" 1>&2
 
 		################################################################################
 		##
 		## Now at the data section, advance offset and prepare to read the whole 
 		## section at once.
 		##
-		let offset=offset+32
-		[ "${DEBUG}" = "true" ] && echo "header offset: ${offset}" 1>&2
-		ODFLAGS="-Ax -tx4 -v --endian=little -w16"
-		DATA=$(od ${ODFLAGS} -j ${offset} -N 476 ${file} | cut -d' ' -f2- | head -30 | tr -d ' ' | tr '\n' ' ')
-		[ "${SAVE}" = "true" ] && echo "${DATA}" >> ${file}.out
-		[ "${DEBUG}" = "true" ] && echo "${DATA}"                      >  data.${blockNo}
-		msg="data:"
-		for entry in ${DATA}; do
-			value=$(echo "${entry}" | sed 's/\([^ ][^ ]\)/\1 /g' | sed 's/  / /g')
-			if [ "${DISPLAY}" = "true" ]; then
-				printf "    %12s %s\n" "${msg}" "${value}"
-			fi
-			msg=
-		done
+		#let offset=offset+32
+		#[ "${DEBUG}" = "true" ] && echo "header offset: ${offset}" 1>&2
+		#ODFLAGS="-Ax -tx4 -v --endian=little -w16"
+		#DATA=$(od ${ODFLAGS} -j ${offset} -N 476 ${file} | cut -d' ' -f2- | head -30 | tr -d ' ' | tr '\n' ' ')
+		#[ "${SAVE}" = "true" ] && echo "${DATA}" >> ${file}.out
+		#[ "${DEBUG}" = "true" ] && echo "${DATA}"                      >  data.${blockNo}
+#		msg="data:"
+#		for entry in ${DATA}; do
+#			value=$(echo "${entry}" | sed 's/\([^ ][^ ]\)/\1 /g' | sed 's/  / /g')
+#			if [ "${DISPLAY}" = "true" ]; then
+#				printf "    %12s %s\n" "${msg}" "${value}"
+#			fi
+#			msg=
+#		done
 
 		####################################################################################
 		##
 		## Finish off with the magicEnd section
 		##
-		let offset=offset+476
-		[ "${DEBUG}" = "true" ] && echo "data offset: ${offset}" 1>&2
-		ODFLAGS="-Ax -tx4 -v --endian=little -w4"
-		DATA=$(od ${ODFLAGS} ${file} -j ${offset} -N 4 | cut -d' ' -f2 | head -1)
-		value=$(echo "${DATA}" | sed 's/\([^ ][^ ]\)/\1 /g' | sed 's/  / /g')
-		if [ "${DISPLAY}" = "true" ]; then
-			printf "    %11s: %8s\n" "endMagic" "${value}"
+		#let offset=offset+476
+		#[ "${DEBUG}" = "true" ] && echo "data offset: ${offset}" 1>&2
+		#ODFLAGS="-Ax -tx4 -v --endian=little -w4"
+		#DATA=$(od ${ODFLAGS} ${file} -j ${offset} -N 4 | cut -d' ' -f2 | head -1)
+		#value=$(echo "${DATA}" | sed 's/\([^ ][^ ]\)/\1 /g' | sed 's/  / /g')
+		#if [ "${DISPLAY}" = "true" ]; then
+		#	printf "    %11s: %8s\n" "endMagic" "${value}"
+		#fi
+
+		if [ "${DEBUG}" = "true" ]; then
+			echo "endMagic offset: ${offset}" 1>&2
+			echo "----------------------------------------------------------------" 1>&2
 		fi
 
-		let offset=offset+4
-		[ "${DEBUG}" = "true" ] && echo "endMagic offset: ${offset}" 1>&2
-		[ "${DEBUG}" = "true" ] && echo "----------------------------------------------------------------" 1>&2
 		if [ "${DISPLAY}" = "true" ]; then
 			echo "----------------------------------------------------------------"
 			printf "block %4s / %4s (press ENTER)\n" "${blockNo}" "${numBlocks}"
@@ -156,6 +244,7 @@ for file in ${ARGLIST}; do
 			clear
 		fi
 		let blockNo=blockNo+1
+		let offset=offset+512
 	done
 
 	if [ "${SAVE}" = "true" ]; then
